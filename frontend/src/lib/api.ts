@@ -1,28 +1,41 @@
-import { supabase } from "./supabase";
+import { clearSession, getSession, refreshSession, type Session } from "./auth";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
 
-async function getAuthHeader(): Promise<Record<string, string>> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
-  return token ? { Authorization: `Bearer ${token}` } : {};
+function bearer(session: Session | null): Record<string, string> {
+  return session ? { Authorization: `Bearer ${session.access_token}` } : {};
+}
+
+/**
+ * fetch with the access token attached. On a 401 it refreshes the session once
+ * and retries; if that fails too the session is cleared (back to /login).
+ */
+async function authFetch(path: string, options: RequestInit = {}): Promise<Response> {
+  const send = (session: Session | null) =>
+    fetch(`${API_URL}${path}`, {
+      ...options,
+      headers: { ...bearer(session), ...(options.headers || {}) },
+    });
+
+  const session = await getSession();
+  let res = await send(session);
+  if (res.status === 401 && session) {
+    const next = await refreshSession();
+    if (next && next.access_token !== session.access_token) res = await send(next);
+    if (res.status === 401) clearSession();
+  }
+  return res;
 }
 
 async function request<T>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const authHeaders = await getAuthHeader();
-  
-  const res = await fetch(`${API_URL}${path}`, {
+  const res = await authFetch(path, {
     ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...authHeaders,
-      ...(options.headers || {}),
-    },
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
   });
-  
+
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(err.error || "Request failed");
@@ -33,8 +46,7 @@ async function request<T>(
 
 /** Authenticated file download (e.g. CSV export). Saves via a temporary link. */
 async function download(path: string, fallbackName = "download"): Promise<{ truncated: boolean }> {
-  const authHeaders = await getAuthHeader();
-  const res = await fetch(`${API_URL}${path}`, { headers: authHeaders });
+  const res = await authFetch(path);
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(err.error || "Download failed");

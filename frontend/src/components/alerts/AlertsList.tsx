@@ -66,7 +66,7 @@ export default function AlertsList({
           <div>
             <p className="font-semibold text-foreground">Alerts aren&apos;t set up yet</p>
             <p className="text-muted-foreground text-xs mt-0.5">
-              Apply <code className="font-mono">add_metric_limits_and_alerts.sql</code> in Supabase, then set limits on the Modules page.
+              Apply <code className="font-mono">add_metric_limits_and_alerts.sql</code> to the database, then set limits on the Modules page.
             </p>
           </div>
         </div>

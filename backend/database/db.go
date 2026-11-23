@@ -32,9 +32,11 @@ func Connect() {
 		log.Fatalf("Failed to get raw database connection: %v", err)
 	}
 
-	// Configure connection pool for single connection to prevent statement conflicts
-	RawDB.SetMaxOpenConns(1)    // Single connection to prevent conflicts
-	RawDB.SetMaxIdleConns(1)    // Keep the single connection idle
+	// Pool size: 1 by default (safe behind poolers such as PgBouncer/Supavisor,
+	// which conflict with concurrent prepared statements). On a direct Postgres
+	// server set DB_MAX_CONNS (e.g. 10).
+	RawDB.SetMaxOpenConns(config.Cfg.DBMaxConns)
+	RawDB.SetMaxIdleConns(config.Cfg.DBMaxConns)
 	RawDB.SetConnMaxLifetime(0) // Don't expire connections
 	RawDB.SetConnMaxIdleTime(0) // Never close idle connections
 

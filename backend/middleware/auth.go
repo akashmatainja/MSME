@@ -3,10 +3,10 @@ package middleware
 import (
 	"strings"
 
+	"github.com/companyuser/backend/authn"
 	"github.com/companyuser/backend/database"
 	"github.com/companyuser/backend/models"
 	"github.com/gofiber/fiber/v2"
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 )
 
@@ -18,8 +18,9 @@ func min(a, b int) int {
 	return b
 }
 
-// JWTAuth validates the Supabase JWT and loads the AuthContext into locals.
-func JWTAuth(jwtSecret string) fiber.Handler {
+// JWTAuth validates an access token issued by /auth/login and loads the
+// AuthContext into locals.
+func JWTAuth() fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		authHeader := c.Get("Authorization")
 
@@ -27,42 +28,9 @@ func JWTAuth(jwtSecret string) fiber.Handler {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "missing authorization header"})
 		}
 
-		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
-
-		token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
-			// Check for ES256 signing method (Supabase default)
-			if _, ok := t.Method.(*jwt.SigningMethodECDSA); ok {
-				// For ES256, we need the public key
-				publicKey := strings.ReplaceAll(jwtSecret, "\\n", "\n") // Replace \n with actual newlines
-				key, err := jwt.ParseECPublicKeyFromPEM([]byte(publicKey))
-				if err != nil {
-					return nil, fiber.NewError(fiber.StatusUnauthorized, "invalid public key format")
-				}
-				return key, nil
-			}
-			// Fallback to HMAC for older tokens
-			if _, ok := t.Method.(*jwt.SigningMethodHMAC); ok {
-				return []byte(jwtSecret), nil
-			}
-			return nil, fiber.NewError(fiber.StatusUnauthorized, "unexpected signing method")
-		})
-		if err != nil || !token.Valid {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid token"})
-		}
-
-		claims, ok := token.Claims.(jwt.MapClaims)
-		if !ok {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid claims"})
-		}
-
-		sub, ok := claims["sub"].(string)
-		if !ok {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "missing sub claim"})
-		}
-
-		authUserID, err := uuid.Parse(sub)
+		authUserID, err := authn.ParseAccessToken(strings.TrimPrefix(authHeader, "Bearer "))
 		if err != nil {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid sub uuid"})
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid token"})
 		}
 
 		// Check if this is the superadmin user

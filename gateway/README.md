@@ -21,7 +21,7 @@ What the gateway reads is managed in the web app. Every minute it downloads its 
 
 ## One-time setup in FSID
 
-1. **Apply the database migration.** Run `add_opcua_gateways.sql` (repository root) once in the Supabase SQL editor, then redeploy the backend.
+1. **Apply the database migration.** Run `add_opcua_gateways.sql` (repository root) once against the database (`psql "$DATABASE_URL" -f add_opcua_gateways.sql`), then redeploy the backend.
 2. **Create a gateway.** Go to **Gateways** in the sidebar, click **Add gateway**, and copy the API key. The key is shown only once. Create one gateway per OPC UA server.
 3. **Tell FSID which tags to read.** Use either way, or both:
    - **Per machine:** open the machine's page, find **Live data source (OPC UA)**, choose the gateway, and enter a node ID for each metric.

@@ -54,7 +54,10 @@ func init() {
 	gw.Post("/ingest", handlers.GatewayIngest)
 	gw.Post("/status", handlers.GatewayStatus)
 
-	api := app.Group("/api/v1", middleware.JWTAuth(config.Cfg.JWTSecret))
+	// Public auth: /auth/login, /auth/refresh, /auth/logout
+	handlers.RegisterAuthRoutes(app)
+
+	api := app.Group("/api/v1", middleware.JWTAuth())
 
 	// Auth routes
 	api.Post("/auth/change-password", handlers.ChangePassword)

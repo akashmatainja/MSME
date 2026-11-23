@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-Multi-tenant industrial energy-monitoring SaaS. Two independent apps share one Supabase project:
+Multi-tenant industrial energy-monitoring SaaS. Two independent apps share one Postgres database:
 
-- `backend/` — Go 1.24 + Fiber v2 + GORM (Postgres via Supabase). Module path `github.com/companyuser/backend`.
+- `backend/` — Go 1.24 + Fiber v2 + GORM (Postgres). Module path `github.com/companyuser/backend`.
 - `frontend/` — Next.js 14 App Router + TypeScript + Tailwind + Zustand + Recharts. Path alias `@/*` → `src/*`.
 - `gateway/` — Go OPC UA edge gateway (separate module, `github.com/companyuser/gateway`): runs on a plant PC, reads the plant OPC UA server, pushes to the backend. See `gateway/README.md`.
 - `opcua_local_demo/` — Python (`asyncua`) OPC UA server/client simulators for local data-flow testing.
-- Root `*.sql` files are hand-applied Supabase migrations/fixes (schema, RLS, superadmin, subdivisions, etc.); root `*.py` scripts are one-off codemods for frontend files. There is no migration runner.
+- Root `*.sql` files are hand-applied migrations/fixes (schema, RLS, superadmin, subdivisions, etc.); root `*.py` scripts are one-off codemods for frontend files. There is no migration runner.
 
 ## Commands
 
@@ -21,16 +21,16 @@ go run .            # prefer over `go run main.go`: package main also includes s
 go build -o main .  # Railway deploy runs ./main
 go vet ./...
 ```
-Required env vars (process exits if missing): `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`. Optional: `PORT` (8080), `STUN_URL`/`TURN_*`, `OPCUA_ENDPOINT`/`OPCUA_USERNAME`/`OPCUA_PASSWORD`.
+Required env vars (process exits if missing): `DATABASE_URL`, `JWT_SECRET` (≥ 32 chars). Optional: `PORT` (8080), `DB_MAX_CONNS` (1), `STUN_URL`/`TURN_*`, `OPCUA_ENDPOINT`/`OPCUA_USERNAME`/`OPCUA_PASSWORD`.
 
-Frontend (from `frontend/`, needs `.env.local` with `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `NEXT_PUBLIC_API_URL`):
+Frontend (from `frontend/`, needs `.env.local` with `NEXT_PUBLIC_API_URL`):
 ```bash
 npm run dev     # binds 0.0.0.0:3000 (reachable from other LAN devices)
 npm run build
 npm run lint
 ```
 
-There are no automated tests in either app.
+Automated tests exist only for `backend/health` and `backend/authn` (`go test ./health/ ./authn/`).
 
 Gateway (from `gateway/`): `go build -o fsid-gateway.exe .`; `fsid-gateway -config gateway.json -once` reads every tag once without sending. End-to-end test without the DB: run `opcua_local_demo/opcua_server.py` (nodes `ns=2;s=Temperature`, `ns=2;s=Voltage_V`, …) and point the gateway at a mock of `/gateway/v1/*`.
 
@@ -39,9 +39,10 @@ OPC UA local demo: `pip install asyncua websockets`, then `python opcua_local_de
 ## Architecture
 
 ### Auth and tenancy
-- Frontend logs in via Supabase Auth (`src/lib/supabase.ts`, `src/contexts/AuthContext.tsx`); `src/lib/api.ts` attaches the Supabase access token as `Authorization: Bearer` to every backend call.
-- `backend/middleware/auth.go` `JWTAuth` verifies the token (ES256 via a PEM public key in `SUPABASE_JWT_SECRET` — literal `\n` are converted — falling back to HMAC), then loads `company_users` → `user_roles` → `role_permissions` → `permissions` and stores a `models.AuthContext` (`CompanyID`, `Permissions` map, `CompanyUser`) in `c.Locals("auth")`. Handlers read it with `middleware.GetAuth(c)`.
-- Tenant isolation is enforced in Go handlers by scoping queries to `auth.CompanyID` — the backend connects directly to Postgres, so Supabase RLS does not protect backend queries. Never take `company_id` from the client on protected routes.
+- Self-hosted auth (`add_app_auth.sql`, `backend/authn/`): login identities live in `app_users` (bcrypt hashes; `company_users.auth_user_id` points at `app_users.id`). Public `POST /auth/login|refresh|logout` (`handlers.RegisterAuthRoutes`, registered before the `/api/v1` group in both entry points; login is rate-limited) issue a 1 h HS256 access token signed with `JWT_SECRET` and a 30-day refresh token that rotates on each use (only its SHA-256 is stored in `auth_refresh_tokens`). Creating/deleting a user or changing their email/password goes through `authn` in the same transaction as `company_users`.
+- Frontend: `src/lib/auth.ts` keeps the session in localStorage (shared across tabs) and refreshes it before expiry; `src/contexts/AuthContext.tsx` exposes it; `src/lib/api.ts` attaches `Authorization: Bearer` and retries once after a refresh on 401.
+- `backend/middleware/auth.go` `JWTAuth` verifies the token (`authn.ParseAccessToken`: HS256, issuer and audience checked), then loads `company_users` → `user_roles` → `role_permissions` → `permissions` and stores a `models.AuthContext` (`CompanyID`, `Permissions` map, `CompanyUser`) in `c.Locals("auth")`. Handlers read it with `middleware.GetAuth(c)`.
+- Tenant isolation is enforced in Go handlers by scoping queries to `auth.CompanyID`; there is no RLS. Never take `company_id` from the client on protected routes.
 - Superadmin is identified by a hard-coded auth UUID in `JWTAuth`, gets a fixed all-permissions map and `CompanyID = uuid.Nil`. When adding a new permission key, add it to that map and to `database/seed.go`.
 - Route-level authorization uses `middleware.RequirePermission("<resource>.write")`; reads are generally unguarded and filtered inside handlers (e.g. `stats.read_all` vs `stats.read_assigned`).
 
@@ -50,13 +51,13 @@ OPC UA local demo: `pip install asyncua websockets`, then `python opcua_local_de
 - `backend/api/index.go` — Vercel serverless adapter (`vercel.json`). It duplicates the REST route table but has **no** WebSocket/WebRTC/hub/OPC UA routes. New REST routes must be added to both files.
 
 ### Database
-- `database/db.go` opens GORM with `PrepareStmt: false`, a **single** pooled connection, and runs `DEALLOCATE ALL` on startup — this works around prepared-statement conflicts with the Supabase pooler. Don't raise pool size or enable prepared statements without addressing that.
-- No AutoMigrate in the startup path; schema changes go into a new root-level `.sql` file applied in Supabase. GORM models live in `backend/models/models.go`; request/response DTOs in `models/types.go`.
+- `database/db.go` opens GORM with `PrepareStmt: false`, a pool of `DB_MAX_CONNS` connections (default 1), and runs `DEALLOCATE ALL` on startup — the single-connection default works around prepared-statement conflicts behind a pooler (PgBouncer/Supavisor). On a direct Postgres connection `DB_MAX_CONNS=10` is fine.
+- No AutoMigrate in the startup path; schema changes go into a new root-level `.sql` file applied by hand with `psql`. GORM models live in `backend/models/models.go`; request/response DTOs in `models/types.go`.
 
 ### Real-time machine data
 - `hub/hub.go`: `GlobalHub` fans out `MetricPayload`s to WebSocket clients at `GET /ws?machine_id=<uuid|all>`.
 - Data sources feeding the hub: the edge gateway (`POST /gateway/v1/ingest`, see below), legacy `POST /opcua/ingest` (now behind `middleware.GatewayAuth` → `handlers.IngestOPCUAData`), the in-process OPC UA client (`opcua_client.go`, `StartOPCUAClient`, commented out in `main.go`; production uses the gateway), and the simulator (`simulator.go`, `StartOPCUASimulator`, buffers and flushes to DB periodically). `POST /api/v1/dev/simulate` is the older stat simulator.
-- Frontend: `components/providers/OPCUAProvider.tsx` holds a global singleton `/ws?machine_id=all` socket feeding `store/useRealtimeStore.ts`; `hooks/useWebSocketMachineStats.ts` is the per-machine socket used on machine detail pages; `hooks/useRealtime.ts` uses Supabase Realtime (Postgres CDC on `machine_stats`). WS URL is derived from `NEXT_PUBLIC_API_URL` (http→ws).
+- Frontend: `components/providers/OPCUAProvider.tsx` holds a global singleton `/ws?machine_id=all` socket feeding `store/useRealtimeStore.ts`; `hooks/useWebSocketMachineStats.ts` is the per-machine socket used on machine detail pages; `hooks/useRealtime.ts` is a leftover stub. WS URL is derived from `NEXT_PUBLIC_API_URL` (http→ws).
 - WebSocket routes in `main.go` are registered before all middleware on purpose; keep new WS routes there too.
 
 ### Remote Camera / Expert Guided Remote Maintenance — DISABLED in this app
@@ -86,7 +87,7 @@ This module now lives on a separate site. Its code is kept but switched off:
 - The agent (`gateway/`) polls config every 60 s (cached to disk), reads in 500-node batches with reconnect backoff, buffers to `gateway-buffer.jsonl` when offline, and posts a status report every 30 s. Keep its `RemoteConfig`/`Reading` JSON in sync with `handlers/gateways.go`.
 
 ### Metric limits and alerts
-- Schema: `add_metric_limits_and_alerts.sql` (root) adds `warn_min/warn_max/crit_min/crit_max` to `module_metrics` and creates `alerts` (one open alert per machine+metric+module, enforced by a partial unique index). Must be applied in Supabase before the backend can create metrics or alerts.
+- Schema: `add_metric_limits_and_alerts.sql` (root) adds `warn_min/warn_max/crit_min/crit_max` to `module_metrics` and creates `alerts` (one open alert per machine+metric+module, enforced by a partial unique index). Must be applied to the database before the backend can create metrics or alerts.
 - `backend/alerts/` is the engine. Every ingest path (`IngestMachineStat`, `IngestOPCUAData`, `Simulate`, `opcua_client.go`, `simulator.go`) calls `alerts.Evaluate`/`EvaluateStats` after storing readings; a worker started in `main.go` opens, escalates and resolves alerts. On Vercel (`api/index.go`, no `Start()`) evaluation runs inline. Limits are cached per machine for 60 s; routes that change modules/metrics/assignments are wrapped in `handlers.InvalidateAlertRules`. Any new ingest path must call the engine too.
 - API: `GET /api/v1/alerts`, `POST /api/v1/alerts/:id/acknowledge`, `GET /api/v1/dashboard/overview` (per-module compliance and alert counts). All use `handlers.machineScope`, which mirrors the frontend access rule.
 - Predictive health score: `backend/health/` holds the pure scoring maths (unit-tested: `go test ./health/`); `handlers/health.go` serves `GET /api/v1/predictive/health` by bucketing `machine_stats` for metrics of the module whose code contains `predict`. Only metrics with limits contribute; no limits → `score: null`. Change weights/caps in `health.go` and keep the formula text in `HealthBreakdown.tsx` in sync. Scoring queries live in `health/compute.go` (`health.Compute`), shared by the API and the snapshot job.

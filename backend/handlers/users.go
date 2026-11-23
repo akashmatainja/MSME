@@ -1,19 +1,17 @@
 package handlers
 
 import (
-	"bytes"
-	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"strings"
+	"log"
 
-	"github.com/companyuser/backend/config"
+	"github.com/companyuser/backend/authn"
 	"github.com/companyuser/backend/database"
 	"github.com/companyuser/backend/middleware"
 	"github.com/companyuser/backend/models"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // GET /api/v1/users/me - Dynamic implementation
@@ -123,14 +121,6 @@ func CreateUser(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"error": "invalid body"})
 	}
 
-	// Create user in Supabase auth.users table
-	authUserID, err := createSupabaseUser(req.Email, req.Password, req.Name)
-	if err != nil {
-		fmt.Printf("DEBUG: Failed to create Supabase user: %v\n", err)
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to create auth user", "details": err.Error()})
-	}
-	fmt.Printf("DEBUG: Created Supabase user with ID: %s\n", authUserID.String())
-
 	// Determine which company to use
 	var targetCompanyID uuid.UUID
 	if auth.Permissions["superadmin"] && req.CompanyID != "" {
@@ -178,35 +168,43 @@ func CreateUser(c *fiber.Ctx) error {
 		subdivisionID = &parsedSubdivisionID
 	}
 
-	// Create user in company_users table
-	user := models.CompanyUser{
-		CompanyID:     targetCompanyID,
-		BranchID:      branchID,
-		SubdivisionID: subdivisionID,
-		AuthUserID:    authUserID,
-		Name:          req.Name,
-		Email:         req.Email,
-		Status:        "active",
-	}
-
-	if err := database.DB.Create(&user).Error; err != nil {
-		// Rollback: delete auth user if company user creation fails
-		deleteSupabaseUser(authUserID)
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to create user"})
-	}
-
-	// Assign role if provided
+	var roleID uuid.UUID
 	if req.RoleID != "" {
-		userRole := models.UserRole{
-			UserID: user.ID,
-			RoleID: models.MustParseUUID(req.RoleID),
+		parsed, err := uuid.Parse(req.RoleID)
+		if err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "Invalid role ID"})
 		}
-		if err := database.DB.Create(&userRole).Error; err != nil {
-			// Rollback: delete both users if role assignment fails
-			database.DB.Delete(&user)
-			deleteSupabaseUser(authUserID)
-			return c.Status(500).JSON(fiber.Map{"error": "Failed to assign role"})
+		roleID = parsed
+	}
+
+	// Create the login identity, company user and role together.
+	var user models.CompanyUser
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
+		authUserID, err := authn.CreateUser(tx, req.Email, req.Password, req.Name)
+		if err != nil {
+			return err
 		}
+		user = models.CompanyUser{
+			CompanyID:     targetCompanyID,
+			BranchID:      branchID,
+			SubdivisionID: subdivisionID,
+			AuthUserID:    authUserID,
+			Name:          req.Name,
+			Email:         authn.NormalizeEmail(req.Email),
+			Status:        "active",
+		}
+		if err := tx.Create(&user).Error; err != nil {
+			return fmt.Errorf("create user: %w", err)
+		}
+		if roleID != uuid.Nil {
+			if err := tx.Create(&models.UserRole{UserID: user.ID, RoleID: roleID}).Error; err != nil {
+				return fmt.Errorf("assign role: %w", err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return authUserError(c, err, "Failed to create user")
 	}
 
 	// Load relationships
@@ -215,80 +213,16 @@ func CreateUser(c *fiber.Ctx) error {
 	return c.Status(201).JSON(user)
 }
 
-// createSupabaseUser creates a user in Supabase auth.users table via Admin API
-func createSupabaseUser(email, password, name string) (uuid.UUID, error) {
-	userID := uuid.New()
-
-	// Basic email validation
-	if !strings.Contains(email, "@") || !strings.Contains(email, ".") {
-		return uuid.Nil, fmt.Errorf("invalid email format: %s", email)
+// authUserError maps login-identity validation errors to 400/409 responses.
+func authUserError(c *fiber.Ctx, err error, fallback string) error {
+	switch {
+	case errors.Is(err, authn.ErrEmailTaken):
+		return c.Status(409).JSON(fiber.Map{"error": err.Error()})
+	case errors.Is(err, authn.ErrInvalidEmail), errors.Is(err, authn.ErrWeakPassword):
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 	}
-
-	payload := map[string]interface{}{
-		"id":       userID.String(),
-		"email":    email,
-		"password": password,
-		"user_metadata": map[string]interface{}{
-			"name": name,
-		},
-		"email_confirm": true,
-	}
-
-	payloadBytes, _ := json.Marshal(payload)
-
-	req, err := http.NewRequest(
-		"POST",
-		config.Cfg.SupabaseURL+"/auth/v1/admin/users",
-		bytes.NewBuffer(payloadBytes),
-	)
-	if err != nil {
-		return uuid.Nil, err
-	}
-
-	req.Header.Set("Authorization", "Bearer "+config.Cfg.SupabaseServiceRoleKey)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("apikey", config.Cfg.SupabaseServiceRoleKey)
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return uuid.Nil, err
-	}
-	defer resp.Body.Close()
-
-	// Read response body for debugging
-	body, _ := io.ReadAll(resp.Body)
-	fmt.Printf("DEBUG: Supabase API Response Status: %d\n", resp.StatusCode)
-	fmt.Printf("DEBUG: Supabase API Response Body: %s\n", string(body))
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return uuid.Nil, fmt.Errorf("Supabase API returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	return userID, nil
-}
-
-// deleteSupabaseUser deletes a user from Supabase auth.users table via Admin API
-func deleteSupabaseUser(userID uuid.UUID) error {
-	req, err := http.NewRequest(
-		"DELETE",
-		config.Cfg.SupabaseURL+"/admin/v1/users/"+userID.String(),
-		nil,
-	)
-	if err != nil {
-		return err
-	}
-
-	req.Header.Set("Authorization", "Bearer "+config.Cfg.SupabaseServiceRoleKey)
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	return nil
+	log.Printf("users: %v", err)
+	return c.Status(500).JSON(fiber.Map{"error": fallback})
 }
 
 // PUT /api/v1/users/:id - Dynamic implementation
@@ -320,8 +254,10 @@ func UpdateUser(c *fiber.Ctx) error {
 	}
 
 	// Update user
+	oldEmail := user.Email
 	user.Name = req.Name
-	user.Email = req.Email
+	user.Email = authn.NormalizeEmail(req.Email)
+	emailChanged := user.Email != authn.NormalizeEmail(oldEmail)
 
 	// Update branch if provided in request
 	if req.BranchID != nil {
@@ -361,8 +297,17 @@ func UpdateUser(c *fiber.Ctx) error {
 	}
 	// If req.SubdivisionID is nil, don't modify the existing subdivision assignment
 
-	if err := database.DB.Save(&user).Error; err != nil {
-		return c.Status(500).JSON(fiber.Map{"error": "Failed to update user"})
+	// The login email lives in app_users; keep both in step.
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
+		if emailChanged {
+			if err := authn.UpdateEmail(tx, user.AuthUserID, user.Email); err != nil {
+				return err
+			}
+		}
+		return tx.Save(&user).Error
+	})
+	if err != nil {
+		return authUserError(c, err, "Failed to update user")
 	}
 
 	// Update role assignment
@@ -393,15 +338,16 @@ func DeleteUser(c *fiber.Ctx) error {
 	auth := middleware.GetAuth(c)
 	userID := c.Params("id")
 
-	// Simple self-deletion protection as backup
-	if auth.AuthUserID.String() == userID {
-		return c.Status(400).JSON(fiber.Map{"error": "Cannot delete your own account"})
-	}
-
 	// Find user in database
 	var user models.CompanyUser
 	if err := database.DB.First(&user, "id = ?", userID).Error; err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "User not found"})
+	}
+
+	// Self-deletion protection (userID is the company_users id, so compare
+	// the login identity behind it).
+	if user.AuthUserID == auth.AuthUserID {
+		return c.Status(400).JSON(fiber.Map{"error": "Cannot delete your own account"})
 	}
 
 	// Check permissions - can only delete users in same company unless superadmin
@@ -409,8 +355,15 @@ func DeleteUser(c *fiber.Ctx) error {
 		return c.Status(403).JSON(fiber.Map{"error": "Access denied"})
 	}
 
-	// Delete user
-	if err := database.DB.Delete(&user).Error; err != nil {
+	// Delete the company user and its login identity (sessions cascade).
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Delete(&user).Error; err != nil {
+			return err
+		}
+		return authn.DeleteUser(tx, user.AuthUserID)
+	})
+	if err != nil {
+		log.Printf("delete user %s: %v", user.ID, err)
 		return c.Status(500).JSON(fiber.Map{"error": "Failed to delete user"})
 	}
 

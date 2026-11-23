@@ -50,12 +50,10 @@ Set these values:
 - **Install Command**: `npm install` (default)
 
 ### 4. Add Environment Variables
-Click **"Environment Variables"** and add these three:
+Click **"Environment Variables"** and add:
 
 | Name | Value |
 |------|-------|
-| `NEXT_PUBLIC_SUPABASE_URL` | `https://byhnyrhltrqjzqhsajli.supabase.co` |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...` (your full key) |
 | `NEXT_PUBLIC_API_URL` | Leave blank for now, we'll update this after backend deployment |
 
 ### 5. Deploy
@@ -90,19 +88,12 @@ Click **"Environment Variables"** and add these:
 | Name | Value | Where to find it |
 |------|-------|------------------|
 | `PORT` | `8080` | Default |
-| `JWT_SECRET` | Your secure secret | From `backend/.env` |
-| `SUPABASE_URL` | `https://byhnyrhltrqjzqhsajli.supabase.co` | Your Supabase project URL |
-| `SUPABASE_KEY` | Your service role key | From Supabase dashboard → Settings → API |
-| `DATABASE_URL` | Your PostgreSQL connection string | From Supabase dashboard → Settings → Database |
+| `JWT_SECRET` | Your secure secret (32+ chars) | Same value as `backend/.env` |
+| `DATABASE_URL` | Your PostgreSQL connection string | From your database host |
 
-**To get DATABASE_URL from Supabase:**
-1. Go to Supabase dashboard
-2. Click your project
-3. Go to **Settings** → **Database**
-4. Copy the **Connection string** (URI format)
-5. Replace `[YOUR-PASSWORD]` with your actual database password
+Example: `postgresql://user:password@db.example.com:5432/dbname?sslmode=require`
 
-Example: `postgresql://postgres.xxx:password@aws-0-region.pooler.supabase.com:5432/postgres`
+Serverless functions open many short-lived connections; if your Postgres host offers a connection pooler, use its URL here and keep `DB_MAX_CONNS` unset (1).
 
 ### 4. Deploy Backend
 - Click **"Deploy"**
@@ -146,7 +137,7 @@ Visit: `https://companyuser-frontend.vercel.app`
 You should see your login page!
 
 ### 3. Test Login
-Try logging in with your Supabase user credentials.
+Try logging in with an existing user's email and password.
 
 ---
 
@@ -221,14 +212,12 @@ Both projects are now set up for automatic deployment:
 - Check backend deployment logs
 
 ### Authentication fails
-- Verify Supabase credentials are correct
-- Check JWT_SECRET matches between backend and Supabase
+- Check `JWT_SECRET` is set (at least 32 characters) and identical on every backend instance
 - Verify DATABASE_URL is correct
 
 ### Database connection fails
 - Verify DATABASE_URL format is correct
-- Check Supabase database password
-- Ensure connection pooler is enabled in Supabase
+- Check the database password and that the host accepts connections from Vercel
 
 ---
 
@@ -250,9 +239,8 @@ Before going to production:
 
 - [ ] Change `JWT_SECRET` to a strong random value (32+ characters)
 - [ ] Update CORS to allow only your frontend domain
-- [ ] Enable Supabase Row Level Security (RLS)
-- [ ] Use environment-specific Supabase keys (not the same for dev/prod)
-- [ ] Set up proper database backups in Supabase
+- [ ] Use a different `JWT_SECRET` and database for dev and prod
+- [ ] Set up database backups
 - [ ] Review and restrict API permissions
 
 ---
@@ -263,7 +251,7 @@ Before going to production:
 
 - Vercel Frontend: Free
 - Vercel Backend: Free
-- Supabase: Free (up to 500MB database)
+- PostgreSQL: depends on your host
 
 ---
 
@@ -271,7 +259,6 @@ Before going to production:
 
 - Vercel Docs: [vercel.com/docs](https://vercel.com/docs)
 - Vercel Community: [github.com/vercel/vercel/discussions](https://github.com/vercel/vercel/discussions)
-- Supabase Docs: [supabase.com/docs](https://supabase.com/docs)
 
 ---
 

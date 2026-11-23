@@ -1,7 +1,7 @@
 -- ============================================================================
 -- Metric limits + alerts
 --
--- Run once in the Supabase SQL editor BEFORE deploying the matching backend.
+-- Run once with psql BEFORE deploying the matching backend.
 -- Safe to re-run (IF NOT EXISTS everywhere).
 --
 -- 1. module_metrics gets four optional limits. A reading is:
@@ -58,10 +58,6 @@ CREATE INDEX IF NOT EXISTS alerts_company_status_started
 CREATE INDEX IF NOT EXISTS alerts_machine_started
     ON alerts (machine_id, started_at DESC);
 
--- Alerts are only read through the Go API (which connects as the table owner
--- and bypasses RLS). Enabling RLS with no policies blocks direct access with
--- the public anon key.
-ALTER TABLE alerts ENABLE ROW LEVEL SECURITY;
 
 COMMIT;
 

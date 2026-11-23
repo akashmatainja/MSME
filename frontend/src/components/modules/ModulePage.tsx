@@ -403,7 +403,7 @@ export default function ModulePage({ slug }: { slug: ModuleSlug }) {
           )}
           {historyUnavailable ? (
             <p className="text-sm text-muted-foreground py-8 text-center">
-              History isn&apos;t set up yet — apply <code className="font-mono">add_health_snapshots.sql</code> in Supabase.
+              History isn&apos;t set up yet — apply <code className="font-mono">add_health_snapshots.sql</code> to the database.
             </p>
           ) : (
             <HealthHistoryChart points={historyPoints} bucket={historyBucket} loading={historyLoading && !history} />

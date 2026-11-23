@@ -1,7 +1,7 @@
 "use client";
 import { createContext, useContext, useEffect, useState } from "react";
-import type { Session, User } from "@supabase/supabase-js";
-import { supabase } from "@/lib/supabase";
+import * as auth from "@/lib/auth";
+import type { Session, AuthUser as User } from "@/lib/auth";
 import type { CompanyUser } from "@/types";
 import { api } from "@/lib/api";
 
@@ -61,24 +61,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-      setUser(data.session?.user ?? null);
-      if (data.session) loadCompanyUser();
+    // Token refreshes also fire onAuthStateChange; only reload the profile
+    // when the signed-in user changes.
+    let currentUserId: string | null = null;
+
+    auth.getSession().then((sess) => {
+      setSession(sess);
+      setUser(sess?.user ?? null);
+      currentUserId = sess?.user.id ?? null;
+      if (sess) loadCompanyUser();
       setLoading(false);
     });
 
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, sess) => {
+    const unsubscribe = auth.onAuthStateChange((sess) => {
       setSession(sess);
       setUser(sess?.user ?? null);
-      if (sess) loadCompanyUser();
-      else { setCompanyUser(null); setPermissions({}); setIsSuperadmin(false); }
+      const nextId = sess?.user.id ?? null;
+      if (nextId !== currentUserId) {
+        currentUserId = nextId;
+        if (sess) loadCompanyUser();
+        else { setCompanyUser(null); setPermissions({}); setIsSuperadmin(false); }
+      }
     });
-    return () => listener.subscription.unsubscribe();
+    return unsubscribe;
   }, []); // eslint-disable-line
 
   const signOut = async () => {
-    await supabase.auth.signOut();
+    await auth.signOut();
     setCompanyUser(null);
     setPermissions({});
     setIsSuperadmin(false);

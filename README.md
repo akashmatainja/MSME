@@ -5,13 +5,13 @@ A production-ready, multi-tenant SaaS platform for real-time energy monitoring w
 ## 🏗️ Architecture
 
 **Frontend:** Next.js 14 (App Router) + TypeScript + Tailwind CSS + Framer Motion + Recharts  
-**Backend:** Go Fiber + GORM + Supabase Auth (JWT)  
-**Database:** Supabase Postgres with Row Level Security (RLS)  
-**Real-time:** Supabase Realtime (Postgres CDC)
+**Backend:** Go Fiber + GORM + built-in auth (bcrypt passwords, JWT access tokens, rotating refresh tokens)  
+**Database:** PostgreSQL  
+**Real-time:** WebSocket hub in the Go backend (`/ws`)
 
 ## ✨ Features
 
-- **Multi-tenant isolation** – Strict company-scoped data access via RLS
+- **Multi-tenant isolation** – Every backend query is scoped to the user's company
 - **Role-based permissions** – Granular permission system (users.write, stats.read_all, etc.)
 - **Real-time dashboard** – Live machine stats with animated charts and KPI cards
 - **Machine management** – CRUD operations for machines with status tracking
@@ -60,16 +60,11 @@ companyUser/
 
 - **Node.js** 18+ and npm
 - **Go** 1.21+
-- **Supabase** project (already configured at `txodkzqzvyuukpnybrqb.supabase.co`)
+- **PostgreSQL** 14+
 
 ### 1. Database Setup
 
-The database schema, RLS policies, and seed data have already been created via Supabase MCP tools. The following are pre-configured:
-
-- ✅ Tables: `companies`, `company_users`, `roles`, `permissions`, `machines`, `machine_stats`, etc.
-- ✅ RLS policies enforcing tenant isolation
-- ✅ Helper functions: `get_my_company_id()`, `has_permission()`, etc.
-- ✅ Demo data: 1 company (Acme Corp), 4 users, 5 machines, 2 days of historical stats
+Schema changes are the `.sql` files in the repository root, applied by hand with `psql` (there is no migration runner). Logins live in `app_users` (`add_app_auth.sql`).
 
 **Demo Credentials:**
 - **Admin:** `admin@acmecorp.com` / `Admin1234!` (full access)
@@ -77,35 +72,28 @@ The database schema, RLS policies, and seed data have already been created via S
 - **Analyst:** `carol@acmecorp.com` / `User1234!` (read-only, all machines)
 - **Superadmin:** `superadmin@platform.com` / `Super1234!` (cross-tenant access)
 
-**Supabase Project:** `https://byhnyrhltrqjzqhsajli.supabase.co`
-
 ### 2. Backend Setup
 
 ```bash
 cd backend
 
-# Copy environment template
+# Copy environment template and fill in DATABASE_URL and JWT_SECRET
 cp .env.example .env
-
-# Edit .env and add your Supabase JWT secret
-# Get it from: Supabase Dashboard → Settings → API → JWT Secret
-nano .env
 
 # Install dependencies
 go mod tidy
 
 # Run the server
-go run main.go
+go run .
 ```
 
 The backend will start on `http://localhost:8080`
 
 **Environment Variables:**
 ```env
-DATABASE_URL=postgresql://postgres:[PASSWORD]@db.byhnyrhltrqjzqhsajli.supabase.co:5432/postgres
-SUPABASE_URL=https://byhnyrhltrqjzqhsajli.supabase.co
-SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ5aG55cmhsdHJxanpxaHNhamxpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0NDM2MjksImV4cCI6MjA4ODAxOTYyOX0.qex_-KP-vAF6TZ6e92xMuNdqm0SHfkoxGI3DVY5fUyI
-SUPABASE_JWT_SECRET=your-jwt-secret-from-dashboard
+DATABASE_URL=postgres://USER:PASSWORD@HOST:5432/DBNAME?sslmode=require
+JWT_SECRET=long-random-string-at-least-32-chars   # openssl rand -base64 48
+DB_MAX_CONNS=10
 PORT=8080
 ```
 
@@ -128,18 +116,8 @@ The frontend will start on `http://localhost:3000`
 
 **Environment Variables:**
 ```env
-NEXT_PUBLIC_SUPABASE_URL=https://byhnyrhltrqjzqhsajli.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ5aG55cmhsdHJxanpxaHNhamxpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI0NDM2MjksImV4cCI6MjA4ODAxOTYyOX0.qex_-KP-vAF6TZ6e92xMuNdqm0SHfkoxGI3DVY5fUyI
 NEXT_PUBLIC_API_URL=http://localhost:8080
 ```
-
-### 4. Enable Supabase Realtime
-
-To enable live dashboard updates:
-
-1. Go to **Supabase Dashboard** → **Database** → **Replication**
-2. Enable replication for the `machine_stats` table
-3. Refresh the dashboard page to start receiving live updates
 
 ## 🎯 Usage
 
@@ -165,7 +143,7 @@ To enable live dashboard updates:
 
 ### API Endpoints
 
-**Authentication:** All API routes require `Authorization: Bearer <jwt>` header
+**Authentication:** `POST /auth/login` (`{email, password}`) returns an access token and a refresh token; `POST /auth/refresh` and `POST /auth/logout` take `{refresh_token}`. All `/api/v1` routes require `Authorization: Bearer <access_token>`.
 
 **Dashboard:**
 - `GET /api/v1/dashboard/summary` – Machine counts, total stats, latest values
@@ -204,8 +182,9 @@ To enable live dashboard updates:
 
 ## 🔒 Security
 
-- **JWT validation** – All routes validate Supabase JWTs
-- **Tenant isolation** – RLS policies enforce company_id scoping
+- **JWT validation** – All `/api/v1` routes validate the backend's own access tokens (HS256, 1 h); refresh tokens rotate and are stored hashed
+- **Passwords** – bcrypt; login is rate-limited
+- **Tenant isolation** – Backend handlers scope every query to the user's company_id
 - **Permission checks** – Middleware enforces granular permissions
 - **No client trust** – Backend derives company_id from JWT, never from client
 - **Prepared statements** – GORM prevents SQL injection
@@ -220,21 +199,17 @@ To enable live dashboard updates:
 - Framer Motion (animations)
 - Recharts (charts)
 - Zustand (realtime state)
-- Supabase JS Client (auth & realtime)
 - Lucide React (icons)
 - Sonner (toast notifications)
 
 **Backend:**
 - Go Fiber (HTTP framework)
 - GORM (ORM)
-- JWT validation (golang-jwt/jwt)
-- Supabase Auth integration
+- JWT (golang-jwt/jwt) + bcrypt auth
 - PostgreSQL driver
 
 **Database:**
-- Supabase Postgres
-- Row Level Security (RLS)
-- Realtime (Postgres CDC)
+- PostgreSQL
 - UUID primary keys
 - JSONB metadata columns
 
@@ -251,8 +226,11 @@ To enable live dashboard updates:
 - `user_machines` – Machine assignments
 - `machine_stats` – Time-series metrics (temperature, rpm, vibration, energy, pressure)
 
-**RLS Policies:**
-- All queries automatically filtered by `company_id`
+- `app_users` – Login identities (email, bcrypt password hash)
+- `auth_refresh_tokens` – Active sessions (hashed refresh tokens)
+
+**Access rules (enforced in the Go backend):**
+- All queries filtered by `company_id`
 - Stats access controlled by `stats.read_all` vs `stats.read_assigned`
 - Write operations require specific permissions
 
@@ -270,23 +248,22 @@ To enable live dashboard updates:
 ## 🐛 Troubleshooting
 
 **Backend won't start:**
-- Verify `DATABASE_URL` and `SUPABASE_JWT_SECRET` in `.env`
+- Verify `DATABASE_URL` and `JWT_SECRET` (at least 32 characters) in `.env`
 - Run `go mod tidy` to install dependencies
 - Check port 8080 is not in use
 
 **Frontend won't start:**
 - Run `npm install` to install dependencies
-- Verify `.env.local` has correct Supabase keys
+- Verify `.env.local` has `NEXT_PUBLIC_API_URL`
 - Check port 3000 is not in use
 
 **Realtime not working:**
-- Enable replication for `machine_stats` in Supabase Dashboard
-- Check browser console for WebSocket errors
+- Check browser console for WebSocket errors on `/ws`
 - Verify user has permission to read stats
 
 **Login fails:**
-- Verify demo users exist in `auth.users` table
-- Check `SUPABASE_JWT_SECRET` matches dashboard value
+- Verify the user exists in `app_users`
+- Too many attempts returns 429; wait a minute
 - Ensure backend is running and accessible
 
 ## 📝 License
@@ -304,4 +281,4 @@ MIT
 
 ---
 
-**Built with ❤️ using Next.js, Go Fiber, and Supabase**
+**Built with ❤️ using Next.js, Go Fiber, and PostgreSQL**

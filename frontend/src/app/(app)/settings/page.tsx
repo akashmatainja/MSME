@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Key, Eye, EyeOff, CheckCircle, Shield, Lock, User, Mail, Clock, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
+import { setSession, type Session } from "@/lib/auth";
 import { useAuth } from "@/contexts/AuthContext";
 import EnergyPulseLoader from "@/components/ui/EnergyPulseLoader";
 
@@ -92,11 +93,13 @@ export default function SettingsPage() {
 
     setLoading(true);
     try {
-      await api.post("/api/v1/auth/change-password", {
+      // The backend signs out every other session and returns a fresh one for this tab.
+      const session = await api.post<Session>("/api/v1/auth/change-password", {
         currentPassword: formData.currentPassword,
         newPassword: formData.newPassword,
       });
-      
+      if (session?.access_token) setSession(session);
+
       setSubmitStatus('success');
       setSubmitMessage('Password changed successfully!');
       toast.success("Password changed successfully!");

@@ -1,7 +1,7 @@
 -- ============================================================================
 -- OPC UA edge gateways
 --
--- Run once in the Supabase SQL editor. Safe to re-run.
+-- Run once with psql. Safe to re-run.
 --
 -- An edge gateway is a small program (see gateway/README.md) running on a PC
 -- inside the plant. It reads the plant's OPC UA server and pushes readings to
@@ -53,9 +53,5 @@ CREATE TABLE IF NOT EXISTS machine_metric_nodes (
     PRIMARY KEY (machine_id, metric_id)
 );
 
--- Read and written only through the Go API (table owner, bypasses RLS); block the anon key.
-ALTER TABLE opcua_gateways       ENABLE ROW LEVEL SECURITY;
-ALTER TABLE machine_opcua        ENABLE ROW LEVEL SECURITY;
-ALTER TABLE machine_metric_nodes ENABLE ROW LEVEL SECURITY;
 
 COMMIT;

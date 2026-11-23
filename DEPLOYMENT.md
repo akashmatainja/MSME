@@ -6,7 +6,7 @@ This guide covers deploying the CompanyUser application to production.
 
 - **Frontend**: Next.js 14 application (deployed to Vercel)
 - **Backend**: Go/Fiber API server (needs separate hosting)
-- **Database**: Supabase PostgreSQL
+- **Database**: PostgreSQL (any host reachable from the backend)
 
 ## Frontend Deployment (Vercel)
 
@@ -34,8 +34,6 @@ This guide covers deploying the CompanyUser application to production.
 
 5. Add Environment Variables:
    ```
-   NEXT_PUBLIC_SUPABASE_URL=https://byhnyrhltrqjzqhsajli.supabase.co
-   NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
    NEXT_PUBLIC_API_URL=https://your-backend-api-url.com
    ```
 
@@ -62,9 +60,7 @@ vercel --prod
 ### Step 3: Configure Environment Variables
 After deployment, go to your project settings in Vercel:
 1. Navigate to **Settings** → **Environment Variables**
-2. Add the following variables:
-   - `NEXT_PUBLIC_SUPABASE_URL`: Your Supabase project URL
-   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`: Your Supabase anon/public key
+2. Add the following variable:
    - `NEXT_PUBLIC_API_URL`: Your deployed backend API URL (e.g., `https://api.yourdomain.com`)
 
 3. Redeploy to apply changes
@@ -81,9 +77,8 @@ The Go backend needs to be deployed separately. Here are recommended options:
    ```
    PORT=8080
    JWT_SECRET=your_jwt_secret
-   SUPABASE_URL=your_supabase_url
-   SUPABASE_KEY=your_supabase_service_role_key
    DATABASE_URL=your_postgres_connection_string
+   DB_MAX_CONNS=10
    ```
 5. Railway will auto-detect Go and deploy
 
@@ -118,7 +113,7 @@ The Go backend needs to be deployed separately. Here are recommended options:
    CMD ["./main"]
    ```
 4. Run: `fly launch`
-5. Set secrets: `fly secrets set JWT_SECRET=xxx SUPABASE_URL=xxx ...`
+5. Set secrets: `fly secrets set JWT_SECRET=xxx DATABASE_URL=xxx`
 6. Deploy: `fly deploy`
 
 ### Option 4: DigitalOcean App Platform
@@ -162,18 +157,15 @@ Configure custom domain through your hosting provider (Railway/Render/Fly.io)
 
 ### Frontend (.env.local)
 ```bash
-NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your_anon_key
 NEXT_PUBLIC_API_URL=https://your-backend-url.com
 ```
 
 ### Backend (.env)
 ```bash
 PORT=8080
-JWT_SECRET=your_secure_jwt_secret
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_KEY=your_service_role_key
-DATABASE_URL=postgresql://user:pass@host:5432/dbname
+JWT_SECRET=your_secure_jwt_secret   # at least 32 chars: openssl rand -base64 48
+DATABASE_URL=postgresql://user:pass@host:5432/dbname?sslmode=require
+DB_MAX_CONNS=10                     # keep 1 if DATABASE_URL goes through PgBouncer
 ```
 
 ## Troubleshooting
@@ -181,7 +173,7 @@ DATABASE_URL=postgresql://user:pass@host:5432/dbname
 ### Frontend Issues
 - **Build fails**: Check Node.js version (should be 18+)
 - **API calls fail**: Verify `NEXT_PUBLIC_API_URL` is correct and backend is running
-- **Authentication issues**: Check Supabase credentials
+- **Authentication issues**: Check `NEXT_PUBLIC_API_URL` and that the backend's `JWT_SECRET` is set
 
 ### Backend Issues
 - **Port binding errors**: Ensure PORT environment variable is set
@@ -202,11 +194,10 @@ DATABASE_URL=postgresql://user:pass@host:5432/dbname
 
 - [ ] Change default JWT_SECRET to a strong random value
 - [ ] Use HTTPS for all endpoints
-- [ ] Enable Supabase Row Level Security (RLS)
 - [ ] Restrict CORS to specific domains (not `*`)
 - [ ] Use environment variables for all secrets
-- [ ] Enable rate limiting on backend
-- [ ] Review and restrict Supabase API keys permissions
+- [ ] Restrict database network access to the backend's hosts
+- [ ] Set up database backups
 
 ## Continuous Deployment
 
@@ -221,7 +212,7 @@ Both Vercel and most backend platforms support automatic deployments:
 - **Vercel**: Free tier (100GB bandwidth, unlimited deployments)
 - **Railway**: ~$5/month (500 hours, 8GB RAM)
 - **Render**: Free tier available, paid starts at $7/month
-- **Supabase**: Free tier (500MB database, 2GB bandwidth)
+- **PostgreSQL**: depends on your host
 
 ## Support
 
@@ -229,4 +220,3 @@ For deployment issues:
 - Vercel: [vercel.com/docs](https://vercel.com/docs)
 - Railway: [docs.railway.app](https://docs.railway.app)
 - Render: [render.com/docs](https://render.com/docs)
-- Supabase: [supabase.com/docs](https://supabase.com/docs)

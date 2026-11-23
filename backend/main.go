@@ -2,8 +2,10 @@ package main
 
 import (
 	"github.com/companyuser/backend/alerts"
+	"github.com/companyuser/backend/authn"
 	"github.com/companyuser/backend/health"
 	"log"
+	"time"
 
 	"github.com/companyuser/backend/config"
 	"github.com/companyuser/backend/database"
@@ -30,6 +32,16 @@ func main() {
 
 	// Hourly health-score history (machine_health_snapshots)
 	health.StartSnapshots()
+
+	// Clean up expired / revoked login sessions once an hour
+	go func() {
+		for {
+			if err := authn.PruneRefreshTokens(); err != nil {
+				log.Printf("[AUTH] prune refresh tokens: %v", err)
+			}
+			time.Sleep(time.Hour)
+		}
+	}()
 
 	// Expert Guided Remote Maintenance (Remote Camera) moved to a separate site.
 	// WebRTC signaling hub for the Remote Camera feature
@@ -102,8 +114,11 @@ func main() {
 	// Disabled: Expert Guided Remote Maintenance moved to a separate site.
 	// app.Get("/webrtc/ice", handlers.GetICEServers)
 
+	// Public auth: /auth/login, /auth/refresh, /auth/logout
+	handlers.RegisterAuthRoutes(app)
+
 	// ── Protected API routes ──────────────────────────────────────────────────
-	api := app.Group("/api/v1", middleware.JWTAuth(config.Cfg.JWTSecret))
+	api := app.Group("/api/v1", middleware.JWTAuth())
 
 	// Auth routes
 	api.Post("/auth/change-password", handlers.ChangePassword)

@@ -3,17 +3,20 @@ package config
 import (
 	"log"
 	"os"
+	"strconv"
 
 	"github.com/joho/godotenv"
 )
 
 type Config struct {
-	DatabaseURL            string
-	SupabaseURL            string
-	SupabaseAnonKey        string
-	SupabaseServiceRoleKey string
-	JWTSecret              string
-	Port                   string
+	DatabaseURL string
+	// JWTSecret signs the access tokens issued by /auth/login (HS256).
+	// Must be a long random string (at least 32 characters).
+	JWTSecret string
+	Port      string
+	// DBMaxConns is the database pool size. Defaults to 1 for poolers that break
+	// with concurrent prepared statements; raise it on a direct Postgres server.
+	DBMaxConns int
 
 	// WebRTC ICE servers for the remote camera feature.
 	// TURN is required when the two peers are on different networks (NAT traversal).
@@ -44,12 +47,10 @@ func Load() {
 	}
 
 	Cfg = Config{
-		DatabaseURL:            mustGet("DATABASE_URL"),
-		SupabaseURL:            mustGet("SUPABASE_URL"),
-		SupabaseAnonKey:        mustGet("SUPABASE_ANON_KEY"),
-		SupabaseServiceRoleKey: mustGet("SUPABASE_SERVICE_ROLE_KEY"),
-		JWTSecret:              mustGet("SUPABASE_JWT_SECRET"),
-		Port:                   getOr("PORT", "8080"),
+		DatabaseURL: mustGet("DATABASE_URL"),
+		JWTSecret:   mustGet("JWT_SECRET"),
+		Port:        getOr("PORT", "8080"),
+		DBMaxConns:  getInt("DB_MAX_CONNS", 1),
 
 		StunURL:        getOr("STUN_URL", "stun:stun.l.google.com:19302"),
 		TurnURL:        getOr("TURN_URL", "turn:openrelay.metered.ca:80"),
@@ -62,6 +63,10 @@ func Load() {
 		OPCUAPassword:     getOr("OPCUA_PASSWORD", ""),
 
 		SimulatorEnabled: getOr("SIMULATOR_ENABLED", "true") != "false",
+	}
+
+	if len(Cfg.JWTSecret) < 32 {
+		log.Fatal("JWT_SECRET must be at least 32 characters")
 	}
 }
 
@@ -78,4 +83,16 @@ func getOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func getInt(key string, fallback int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 {
+		log.Fatalf("%s must be a positive integer", key)
+	}
+	return n
 }

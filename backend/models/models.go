@@ -370,6 +370,34 @@ type AuthContext struct {
 	Permissions map[string]bool
 }
 
+// ─── Self-hosted auth (add_app_auth.sql) ───────────────────────────────────
+
+// AppUser is a login identity. Its ID is what company_users.auth_user_id
+// points at.
+type AppUser struct {
+	ID            uuid.UUID  `json:"id" gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
+	Email         string     `json:"email"`
+	PasswordHash  string     `json:"-"`
+	Name          string     `json:"name"`
+	LastSignInAt  *time.Time `json:"last_sign_in_at"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+}
+
+func (AppUser) TableName() string { return "app_users" }
+
+// AuthRefreshToken stores the SHA-256 hash of an issued refresh token.
+type AuthRefreshToken struct {
+	ID        uuid.UUID  `gorm:"type:uuid;primaryKey;default:gen_random_uuid()"`
+	UserID    uuid.UUID  `gorm:"type:uuid;not null"`
+	TokenHash string     `gorm:"not null"`
+	ExpiresAt time.Time  `gorm:"not null"`
+	RevokedAt *time.Time
+	CreatedAt time.Time
+}
+
+func (AuthRefreshToken) TableName() string { return "auth_refresh_tokens" }
+
 // ─── OPC UA edge gateways (add_opcua_gateways.sql) ─────────────────────────
 
 // OPCUAGateway is an on-site agent that reads a plant OPC UA server and pushes

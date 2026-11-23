@@ -3,7 +3,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { Activity, Mail, Lock, Eye, EyeOff, Loader2 } from "lucide-react";
-import { supabase } from "@/lib/supabase";
+import { signIn, AuthError } from "@/lib/auth";
 import { toast } from "sonner";
 
 export default function LoginPage() {
@@ -32,47 +32,26 @@ export default function LoginPage() {
     setLoginError(""); // Clear previous error
     
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-      
+      await signIn(email, password);
       setLoading(false);
-      
-      if (error) {
-        // Handle different error types with user-friendly messages
-        let errorMessage = "Login failed. Please try again.";
-        
-        if (error.message.includes("Invalid login credentials")) {
-          errorMessage = "Invalid email or password. Please check your credentials and try again.";
-        } else if (error.message.includes("Email not confirmed")) {
-          errorMessage = "Please confirm your email address before logging in.";
-        } else if (error.message.includes("Too many requests")) {
-          errorMessage = "Too many login attempts. Please try again later.";
-        } else if (error.message.includes("Invalid email")) {
-          errorMessage = "Please enter a valid email address.";
-        } else {
-          errorMessage = error.message || "Login failed. Please try again.";
-        }
-        
-        setLoginError(errorMessage);
-        toast.error(errorMessage);
-      } else {
-        // Check session immediately after login
-        const { data: sessionData } = await supabase.auth.getSession();
-        
-        if (sessionData.session) {
-          toast.success("Login successful!");
-          router.replace("/dashboard");
-        } else {
-          const errorMsg = "Login failed. Please try again.";
-          setLoginError(errorMsg);
-          toast.error(errorMsg);
-        }
-      }
+      toast.success("Login successful!");
+      router.replace("/dashboard");
     } catch (err) {
       setLoading(false);
-      const errorMsg = "An unexpected error occurred. Please try again.";
-      setLoginError(errorMsg);
-      toast.error(errorMsg);
-      console.error("Login error:", err);
+      let errorMessage = "An unexpected error occurred. Please try again.";
+      if (err instanceof AuthError) {
+        if (err.status === 401) {
+          errorMessage = "Invalid email or password. Please check your credentials and try again.";
+        } else if (err.status === 429) {
+          errorMessage = "Too many login attempts. Please try again later.";
+        } else {
+          errorMessage = err.message || "Login failed. Please try again.";
+        }
+      } else {
+        console.error("Login error:", err);
+      }
+      setLoginError(errorMessage);
+      toast.error(errorMessage);
     }
   }
 

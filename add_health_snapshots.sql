@@ -1,7 +1,7 @@
 -- ============================================================================
 -- Predictive health score history
 --
--- Run once in the Supabase SQL editor. Safe to re-run.
+-- Run once with psql. Safe to re-run.
 -- Requires add_metric_limits_and_alerts.sql to have been applied first.
 --
 -- The backend (health.StartSnapshots) writes one row per machine per hour:
@@ -35,7 +35,5 @@ CREATE INDEX IF NOT EXISTS machine_health_snapshots_company_time
 CREATE INDEX IF NOT EXISTS machine_health_snapshots_captured
     ON machine_health_snapshots (captured_at);
 
--- Read only through the Go API (table owner, bypasses RLS); block the anon key.
-ALTER TABLE machine_health_snapshots ENABLE ROW LEVEL SECURITY;
 
 COMMIT;
