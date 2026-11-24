@@ -8,6 +8,7 @@ import { api } from "@/lib/api";
 import { useModuleAccess } from "@/components/providers/ModuleAccessProvider";
 import CustomSelect, { type SelectOption } from "@/components/ui/CustomSelect";
 import RangePills from "@/components/ui/RangePills";
+import DateTimePicker from "@/components/ui/DateTimePicker";
 import AnimatedPagination from "@/components/ui/AnimatedPagination";
 import EnergyPulseLoader from "@/components/ui/EnergyPulseLoader";
 import type { ReadingLogPage, ReadingStatus } from "@/types";
@@ -58,9 +59,6 @@ function toLocalInput(d: Date) {
 function formatValue(v: number) {
   return Number.isInteger(v) ? v.toLocaleString() : v.toLocaleString(undefined, { maximumFractionDigits: 3 });
 }
-
-const inputCls =
-  "w-full px-3 py-2 rounded-lg border border-border/60 bg-card/50 text-sm font-medium tabular focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500/50";
 
 function LogsView() {
   const params = useSearchParams();
@@ -216,14 +214,14 @@ function LogsView() {
 
         {preset === "custom" && (
           <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-xl">
-            <label className="space-y-1">
+            <div className="space-y-1">
               <span className="text-xs font-semibold text-muted-foreground">From</span>
-              <input type="datetime-local" value={customFrom} max={customTo} onChange={(e) => setCustomFrom(e.target.value)} className={inputCls} />
-            </label>
-            <label className="space-y-1">
+              <DateTimePicker mode="datetime" value={customFrom} max={customTo} onChange={setCustomFrom} />
+            </div>
+            <div className="space-y-1">
               <span className="text-xs font-semibold text-muted-foreground">To</span>
-              <input type="datetime-local" value={customTo} min={customFrom} onChange={(e) => setCustomTo(e.target.value)} className={inputCls} />
-            </label>
+              <DateTimePicker mode="datetime" value={customTo} min={customFrom} max={toLocalInput(new Date())} onChange={setCustomTo} />
+            </div>
           </motion.div>
         )}
 
@@ -302,7 +300,6 @@ function LogsView() {
                       <td className="p-3 text-muted-foreground">{r.module_name ?? "—"}</td>
                       <td className="p-3">
                         <span className="text-foreground">{r.metric_name ?? r.metric_key}</span>
-                        {r.metric_name && <span className="ml-2 text-xs text-muted-foreground font-mono">{r.metric_key}</span>}
                       </td>
                       <td className={`p-3 text-right tabular ${r.status === "critical" ? "cell-danger" : r.status === "warning" ? "cell-warning" : "text-foreground"}`}>
                         {formatValue(r.metric_value)}

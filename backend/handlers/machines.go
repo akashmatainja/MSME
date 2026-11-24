@@ -518,6 +518,12 @@ func GetMachineStats(c *fiber.Ctx) error {
 			query = query.Where("ts >= ?", t)
 		}
 	}
+	// Optional ?until= (ISO timestamp) so the charts can look at a past window.
+	if until := c.Query("until"); until != "" {
+		if t, err := time.Parse(time.RFC3339, until); err == nil {
+			query = query.Where("ts <= ?", t)
+		}
+	}
 
 	var stats []models.MachineStat
 	query.Find(&stats)

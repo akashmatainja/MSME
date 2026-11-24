@@ -1,7 +1,7 @@
 "use client";
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Check, CheckCircle2, Settings2 } from "lucide-react";
+import { Check, CheckCircle2, LineChart, Settings2 } from "lucide-react";
 import { useAlerts } from "@/hooks/useMonitoring";
 import { relativeTime } from "@/lib/utils";
 import { moduleDefForCode } from "@/lib/modules";
@@ -24,6 +24,7 @@ export default function AlertsList({
   showModule = false,
   limit = 8,
   id,
+  onView,
 }: {
   title: string;
   moduleId?: string;
@@ -31,6 +32,8 @@ export default function AlertsList({
   showModule?: boolean;
   limit?: number;
   id?: string;
+  /** When set, each row gets a button that shows the alert's time on the trend chart. */
+  onView?: (alert: Alert) => void;
 }) {
   const [tab, setTab] = useState<"open" | "resolved">("open");
   const { alerts, loading, unavailable, acknowledge } = useAlerts({ status: tab, moduleId, machineId, limit });
@@ -86,7 +89,14 @@ export default function AlertsList({
         <ul className="divide-y divide-border">
           <AnimatePresence initial={false}>
             {alerts.map((a, i) => (
-              <AlertRow key={a.id} alert={a} index={i} showModule={showModule} onAck={() => acknowledge(a.id)} />
+              <AlertRow
+                key={a.id}
+                alert={a}
+                index={i}
+                showModule={showModule}
+                onAck={() => acknowledge(a.id)}
+                onView={onView ? () => onView(a) : undefined}
+              />
             ))}
           </AnimatePresence>
         </ul>
@@ -95,7 +105,9 @@ export default function AlertsList({
   );
 }
 
-function AlertRow({ alert: a, index, showModule, onAck }: { alert: Alert; index: number; showModule: boolean; onAck: () => void }) {
+function AlertRow({ alert: a, index, showModule, onAck, onView }: {
+  alert: Alert; index: number; showModule: boolean; onAck: () => void; onView?: () => void;
+}) {
   const open = a.status === "open";
   const badgeKey = open ? a.severity : "resolved";
   const mod = showModule && a.module_code ? moduleDefForCode(a.module_code) : undefined;
@@ -120,6 +132,15 @@ function AlertRow({ alert: a, index, showModule, onAck }: { alert: Alert; index:
       <span className="text-xs text-muted-foreground tabular shrink-0 hidden sm:inline" title={new Date(a.started_at).toLocaleString()}>
         {open ? relativeTime(a.started_at) : `resolved ${relativeTime(a.resolved_at ?? a.last_seen_at)}`}
       </span>
+      {onView && (
+        <button
+          onClick={onView}
+          className="shrink-0 inline-flex items-center justify-center gap-1 text-xs font-bold uppercase rounded border border-border px-1.5 py-1 text-muted-foreground hover:text-brand-600 hover:border-brand-500/60 transition-colors"
+          title="Show this alert's time period on the trend chart"
+        >
+          <LineChart className="w-3 h-3" /> View
+        </button>
+      )}
       {open && (
         a.acknowledged_at ? (
           <span className="text-xs font-bold uppercase text-muted-foreground w-[52px] text-right shrink-0">Ack&apos;d</span>

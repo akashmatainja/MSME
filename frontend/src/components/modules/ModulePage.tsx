@@ -2,7 +2,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Cpu, DatabaseBackup, Lock } from "lucide-react";
+import DateTimePicker from "@/components/ui/DateTimePicker";
+import { ChevronLeft, ChevronRight, Cpu, DatabaseBackup, Lock, Radio, ZoomIn, ZoomOut } from "lucide-react";
 import { api } from "@/lib/api";
 import { getDateRangeFrom } from "@/lib/utils";
 import { moduleDef, type ModuleSlug } from "@/lib/modules";
@@ -26,16 +27,47 @@ import { useChartPalette, seriesColor } from "@/components/charts/palette";
 import {
   buildModuleChartData, chartThreshold, hasLimits, metricStatus, moduleSeries, pickPrimaryMetric, seriesDelta,
 } from "@/components/charts/moduleData";
-import type { DashboardSummary, MachineStat } from "@/types";
+import type { Alert, DashboardSummary, MachineStat } from "@/types";
 
-type Range = "15m" | "1h" | "24h" | "7d";
-const RANGES: { label: string; value: Range }[] = [
-  { label: "15m", value: "15m" }, { label: "1h", value: "1h" },
-  { label: "24h", value: "24h" }, { label: "7d", value: "7d" },
-];
-const RANGE_TEXT: Record<Range, string> = {
-  "15m": "last 15 minutes", "1h": "last hour", "24h": "last 24 hours", "7d": "last 7 days",
-};
+const NAV_BTN =
+  "inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-bold border border-border bg-card text-foreground " +
+  "hover:border-navy-500 disabled:opacity-40 disabled:pointer-events-none transition-colors";
+
+const SEC = 1000, MIN = 60 * SEC, HOUR = 60 * MIN, DAY = 24 * HOUR;
+
+/** Chart window sizes, smallest first (zoom buttons step through these). */
+const SCALES = [
+  { label: "1m", ms: MIN, text: "last minute" },
+  { label: "10m", ms: 10 * MIN, text: "last 10 minutes" },
+  { label: "15m", ms: 15 * MIN, text: "last 15 minutes" },
+  { label: "30m", ms: 30 * MIN, text: "last 30 minutes" },
+] as const;
+const MIN_SPAN = 10 * SEC;
+const MAX_SPAN = 30 * MIN;
+
+/** What the trend chart shows: a window of `span` ms ending at `end` (null = now, follows live data). */
+type View = { span: number; end: number | null };
+
+function spanText(ms: number) {
+  if (ms >= DAY) return `${+(ms / DAY).toFixed(1)} d`;
+  if (ms >= HOUR) return `${+(ms / HOUR).toFixed(1)} h`;
+  if (ms >= MIN) return `${+(ms / MIN).toFixed(1)} min`;
+  return `${Math.round(ms / SEC)} s`;
+}
+
+function windowText(from: number, to: number) {
+  const sameDay = new Date(from).toDateString() === new Date(to).toDateString();
+  const withSec = to - from <= 15 * MIN;
+  const time = (t: number) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", ...(withSec ? { second: "2-digit" } : {}), hour12: false });
+  const date = (t: number) => new Date(t).toLocaleDateString([], { month: "short", day: "numeric" });
+  return sameDay ? `${date(from)}, ${time(from)} – ${time(to)}` : `${date(from)} ${time(from)} – ${date(to)} ${time(to)}`;
+}
+
+/** Value for <input type="datetime-local"> in local time. */
+function toLocalInput(t: number) {
+  const d = new Date(t - new Date(t).getTimezoneOffset() * MIN);
+  return d.toISOString().slice(0, 16);
+}
 
 /**
  * One monitoring module across the user's machines. The machine is chosen with
@@ -51,7 +83,9 @@ export default function ModulePage({ slug }: { slug: ModuleSlug }) {
   const palette = useChartPalette();
   const { latestValues, timeSeries, isLive } = useRealtimeStore();
 
-  const [range, setRange] = useState<Range>("15m");
+  const [view, setView] = useState<View>({ span: 15 * MIN, end: null });
+  const following = view.end === null;
+  const [now, setNow] = useState(() => Date.now());
   const [stats, setStats] = useState<MachineStat[]>([]);
   const [statsLoading, setStatsLoading] = useState(false);
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
@@ -72,15 +106,25 @@ export default function ModulePage({ slug }: { slug: ModuleSlug }) {
     api.get<DashboardSummary>("/api/v1/dashboard/summary").then(setSummary).catch(() => {});
   }, []);
 
-  // Historical stats for the selected machine and range, refreshed every 30 s
+  // While following "now", slide the window every second.
+  useEffect(() => {
+    if (!following) return;
+    setNow(Date.now());
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [following]);
+
+  // Stored stats for the selected machine and window; refreshed every 30 s while following now.
   useEffect(() => {
     if (!machine) return;
     let cancelled = false;
     const load = async () => {
       setStatsLoading(true);
       try {
-        const since = getDateRangeFrom(range).toISOString();
-        const res = await api.get<MachineStat[]>(`/api/v1/machines/${machine.id}/stats?since=${since}&limit=5000`);
+        const end = view.end ?? Date.now();
+        let url = `/api/v1/machines/${machine.id}/stats?since=${new Date(end - view.span).toISOString()}&limit=5000`;
+        if (view.end !== null) url += `&until=${new Date(view.end).toISOString()}`;
+        const res = await api.get<MachineStat[]>(url);
         if (!cancelled) setStats(res || []);
       } catch {
         if (!cancelled) setStats([]);
@@ -90,31 +134,69 @@ export default function ModulePage({ slug }: { slug: ModuleSlug }) {
     };
     setStats([]);
     load();
+    if (view.end !== null) return () => { cancelled = true; };
     const t = setInterval(load, 30000);
     return () => { cancelled = true; clearInterval(t); };
-  }, [machine, range]);
+  }, [machine, view.span, view.end]);
 
-  const useLive = isLive && range === "15m";
+  const useLive = isLive && following;
+  const windowEnd = view.end ?? now;
+  const windowStart = windowEnd - view.span;
+  const scale = SCALES.find((s) => s.ms === view.span);
+
+  // ── View controls ─────────────────────────────────────────────────────────
+  /** Show [from, to]; snaps back to following "now" when the window reaches the present. */
+  const showWindow = useCallback((span: number, end: number) => {
+    span = Math.max(MIN_SPAN, Math.min(span, MAX_SPAN));
+    setView({ span, end: end >= Date.now() - SEC ? null : end });
+  }, []);
+  const zoomTo = (span: number) => {
+    if (following) return setView({ span, end: null });
+    const center = windowEnd - view.span / 2;
+    showWindow(span, Math.min(center + span / 2, Date.now()));
+  };
+  const smaller = [...SCALES].reverse().find((s) => s.ms < view.span);
+  const larger = SCALES.find((s) => s.ms > view.span);
+  const panBack = () => showWindow(view.span, windowEnd - view.span);
+  const panForward = () => showWindow(view.span, windowEnd + view.span);
+  const goTo = (value: string) => {
+    const t = new Date(value).getTime();
+    if (Number.isFinite(t)) showWindow(view.span, Math.min(t + view.span / 2, Date.now()));
+  };
+  const viewAlert = useCallback((a: Alert) => {
+    const start = new Date(a.started_at).getTime();
+    const stop = a.resolved_at ? new Date(a.resolved_at).getTime() : a.status === "open" ? Date.now() : new Date(a.last_seen_at).getTime();
+    const dur = Math.max(stop - start, 0);
+    const pad = Math.max(2 * MIN, dur * 0.25);
+    const need = dur + 2 * pad;
+    const span = SCALES.find((s) => s.ms >= need)?.ms ?? MAX_SPAN;
+    // Long alerts don't fit in 30 min: show their start.
+    showWindow(span, Math.min(start - pad + span, Date.now()));
+    document.getElementById("module-trend")?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [showWindow]);
   const metrics = useMemo(() => mod?.metrics ?? [], [mod]);
   const sel = selected ?? metrics.map((m) => m.code);
 
   const chartData = useMemo(
-    () => (mod && machine ? buildModuleChartData(mod, machine.id, { live: useLive, liveSeries: timeSeries[machine.id], stats }) : []),
-    [mod, machine, useLive, timeSeries, stats]
+    () => (mod && machine
+      ? buildModuleChartData(mod, machine.id, { live: useLive, liveSeries: timeSeries[machine.id], stats, window: [windowStart, windowEnd] })
+      : []),
+    [mod, machine, useLive, timeSeries, stats, windowStart, windowEnd]
   );
   const series = useMemo(() => (mod ? moduleSeries(mod, sel, def.primaryPrefer) : []), [mod, sel, def]); // eslint-disable-line react-hooks/exhaustive-deps
   const leadMetric = metrics.find((m) => m.code === series[0]?.key);
   const threshold = useMemo(() => chartThreshold(machine, series[0], chartData, leadMetric), [machine, series, chartData, leadMetric]);
 
-  // Compliance per metric over the selected range (from the overview endpoint)
-  const since = useMemo(() => getDateRangeFrom(range), [range]);
+  // Compliance per metric since the start of the selected window (from the overview endpoint).
+  // Recomputed only when the view changes, not on every live tick.
+  const since = useMemo(() => new Date((view.end ?? Date.now()) - view.span), [view.span, view.end]);
   const { overview } = useOverview(since);
   const overviewModule = overview?.modules.find((m) => m.module_id === mod?.id);
   const anyLimits = metrics.some(hasLimits);
 
   // Predictive health score (24 h window, or 7 d when that range is selected)
   const isPredictive = slug === "predictive";
-  const healthSince = useMemo(() => getDateRangeFrom(range === "7d" ? "7d" : "24h"), [range]);
+  const healthSince = useMemo(() => getDateRangeFrom("24h"), []);
   const { health, loading: healthLoading } = usePredictiveHealth(healthSince, isPredictive);
   const machineHealth = health?.machines.find((h) => h.machine_id === machine?.id);
   const { history, loading: historyLoading, unavailable: historyUnavailable, bucket: historyBucket, reload: reloadHistory } =
@@ -219,7 +301,11 @@ export default function ModulePage({ slug }: { slug: ModuleSlug }) {
               iconLeft={<Cpu className="w-4 h-4" />}
             />
           )}
-          <RangePills value={range} options={RANGES} onChange={setRange} />
+          <RangePills
+            value={scale?.label ?? "custom"}
+            options={SCALES.map((s) => ({ label: s.label, value: s.label as string }))}
+            onChange={(label) => zoomTo(SCALES.find((s) => s.label === label)!.ms)}
+          />
         </div>
       </div>
 
@@ -276,12 +362,14 @@ export default function ModulePage({ slug }: { slug: ModuleSlug }) {
 
       {/* Trend + side panel */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <section className="glass-card p-5 lg:col-span-2 min-w-0">
+        <section id="module-trend" className="glass-card p-5 lg:col-span-2 min-w-0">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
             <h2 className="section-title">
               {series.slice(0, 3).map((s, i) => (i === 0 ? s.name : s.name.toLowerCase())).join(series.length > 2 ? ", " : " & ") || "Trend"}
               {series.length > 3 ? ` +${series.length - 3}` : ""}
-              <span className="text-muted-foreground font-semibold"> — {RANGE_TEXT[range]}</span>
+              <span className="text-muted-foreground font-semibold">
+                {" — "}{following ? (scale ? scale.text : `last ${spanText(view.span)}`) : windowText(windowStart, windowEnd)}
+              </span>
             </h2>
             {metrics.length > 1 && (
               <div className="flex flex-wrap gap-1.5">
@@ -304,28 +392,62 @@ export default function ModulePage({ slug }: { slug: ModuleSlug }) {
               </div>
             )}
           </div>
+          {/* Time navigation: step back/forward, zoom, jump to a time, back to live */}
+          <div className="flex flex-wrap items-center gap-1.5 mb-3">
+            <button onClick={panBack} className={NAV_BTN} title={`Show the previous ${spanText(view.span)}`}>
+              <ChevronLeft className="w-3.5 h-3.5" /> Earlier
+            </button>
+            <button onClick={panForward} disabled={following} className={NAV_BTN} title={`Show the next ${spanText(view.span)}`}>
+              Later <ChevronRight className="w-3.5 h-3.5" />
+            </button>
+            <span className="w-px h-5 bg-border mx-1" />
+            <button onClick={() => smaller && zoomTo(smaller.ms)} disabled={!smaller} className={NAV_BTN} title={smaller ? `Zoom in to ${smaller.label}` : "Fully zoomed in"}>
+              <ZoomIn className="w-3.5 h-3.5" />
+            </button>
+            <button onClick={() => larger && zoomTo(larger.ms)} disabled={!larger} className={NAV_BTN} title={larger ? `Zoom out to ${larger.label}` : "Fully zoomed out"}>
+              <ZoomOut className="w-3.5 h-3.5" />
+            </button>
+            {!scale && <span className="text-xs font-bold text-muted-foreground tabular px-1">{spanText(view.span)}</span>}
+            <span className="w-px h-5 bg-border mx-1" />
+            <div title="Centre the chart on this date and time" className="w-[210px]">
+              <DateTimePicker
+                mode="datetime"
+                size="sm"
+                max={toLocalInput(now)}
+                value={toLocalInput(windowEnd - view.span / 2)}
+                onChange={goTo}
+              />
+            </div>
+            {!following && (
+              <button onClick={() => setView({ span: view.span, end: null })} className={`${NAV_BTN} !text-brand-600 dark:!text-brand-400 !border-brand-500/50`}>
+                <Radio className="w-3.5 h-3.5" /> Back to live
+              </button>
+            )}
+            <span className="ml-auto text-xs text-muted-foreground hidden md:inline">Drag across the chart to zoom in</span>
+          </div>
           <TrendChart
             data={chartData}
             series={series}
-            range={range}
             height={300}
             threshold={threshold}
             animate={!useLive}
+            domain={[windowStart, windowEnd]}
+            onZoom={(from, to) => showWindow(to - from, to)}
             loading={statsLoading && !useLive && !chartData.length}
-            emptyText={useLive ? "Waiting for live OPC UA data…" : "No data in the selected range"}
+            emptyText={useLive ? "Waiting for live OPC UA data…" : "No data in this time window"}
           />
         </section>
 
         <section className="glass-card p-5 min-w-0">
           {isEnv && anyLimits && overviewModule ? (
             <>
-              <h2 className="section-title mb-1">Threshold status <span className="text-muted-foreground font-semibold">— {range}</span></h2>
+              <h2 className="section-title mb-1">Threshold status <span className="text-muted-foreground font-semibold">— {following && scale ? scale.label : `since ${since.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false })}`}</span></h2>
               <p className="text-xs text-muted-foreground mb-5">Share of readings inside each parameter&apos;s limits</p>
               <ThresholdStatus metrics={overviewModule.metrics} perMachine={overviewModule.per_machine} machineId={machine.id} />
             </>
           ) : isEnv ? (
             <>
-              <h2 className="section-title mb-1">Range overview <span className="text-muted-foreground font-semibold">— {range}</span></h2>
+              <h2 className="section-title mb-1">Range overview <span className="text-muted-foreground font-semibold">— {following && scale ? scale.label : spanText(view.span)}</span></h2>
               <p className="text-xs text-muted-foreground mb-5">Min–max band, average tick and latest value</p>
               <RangeOverview data={chartData} series={series} />
             </>
@@ -415,7 +537,7 @@ export default function ModulePage({ slug }: { slug: ModuleSlug }) {
         <section className="glass-card p-5">
           <div className="flex flex-wrap items-baseline justify-between gap-2 mb-3">
             <h2 className="section-title">Health breakdown <span className="text-muted-foreground font-semibold">— {machine.code || machine.name}</span></h2>
-            <span className="text-xs text-muted-foreground">Window: {range === "7d" ? "last 7 days" : "last 24 hours"}</span>
+            <span className="text-xs text-muted-foreground">Window: last 24 hours</span>
           </div>
           {machineHealth ? <HealthBreakdown machine={machineHealth} />
             : healthLoading ? <div className="skeleton h-24" />
@@ -423,7 +545,14 @@ export default function ModulePage({ slug }: { slug: ModuleSlug }) {
         </section>
       )}
 
-      <AlertsList title={isPredictive ? "Active predictive alerts" : `Recent ${def.navLabel.toLowerCase()} alerts`} moduleId={mod.id} />
+      <AlertsList
+        title={isPredictive ? "Active predictive alerts" : `Recent ${def.navLabel.toLowerCase()} alerts`}
+        moduleId={mod.id}
+        onView={(a) => {
+          if (a.machine_id !== machine.id) selectMachine(a.machine_id);
+          viewAlert(a);
+        }}
+      />
     </div>
   );
 }

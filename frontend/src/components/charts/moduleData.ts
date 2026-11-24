@@ -29,18 +29,40 @@ export function moduleSeries(module: Module, selectedCodes: string[], prefer?: R
 export function buildModuleChartData(
   module: Module,
   machineId: string,
-  opts: { live: boolean; liveSeries?: LiveSeries; stats: MachineStat[] }
+  opts: {
+    live: boolean;
+    liveSeries?: LiveSeries;
+    stats: MachineStat[];
+    /**
+     * Time window [from, to] in ms. When set, stored stats and (if `live`) the
+     * live buffer are merged and clipped to the window, so zoomed-in recent views
+     * get 1-second live points on top of the stored samples.
+     */
+    window?: [number, number];
+  }
 ): TrendPoint[] {
   const merged: Record<string, Record<string, number>> = {};
+  const win = opts.window;
+  // Per-second rows when zoomed in to ≤ 15 min, per-minute otherwise.
+  // Full ISO with "Z": a bare "2026-11-24T04:45" would be parsed as local time.
+  const bucketMs = win && win[1] - win[0] <= 15 * 60_000 ? 1000 : 60_000;
   const put = (ts: string, code: string, v: number) => {
-    const bucket = new Date(ts).toISOString().slice(0, 16);
+    const t = new Date(ts).getTime();
+    if (!Number.isFinite(t)) return;
+    if (win && (t < win[0] || t > win[1])) return;
+    const bucket = new Date(Math.floor(t / bucketMs) * bucketMs).toISOString();
     (merged[bucket] ??= {})[code] = v;
   };
 
   for (const metric of module.metrics ?? []) {
     const key = metric.code.toLowerCase();
     const live = opts.liveSeries?.[key];
-    if (opts.live && live) {
+    if (win) {
+      opts.stats
+        .filter((s) => s.metric_key === key && s.machine_id === machineId)
+        .forEach((s) => put(s.ts, metric.code, s.metric_value));
+      if (opts.live && live) live.forEach(({ ts, value }) => put(ts, metric.code, value));
+    } else if (opts.live && live) {
       live.forEach(({ ts, value }) => put(ts, metric.code, value));
     } else {
       opts.stats

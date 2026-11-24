@@ -2,7 +2,9 @@
 import { create } from "zustand";
 import type { MachineStat } from "@/types";
 
-const MAX_TIMESERIES = 200;
+// ~11 min of 1-second live points per metric, so the 1m and 10m chart views
+// have full resolution for the recent past.
+const MAX_TIMESERIES = 660;
 const MAX_FEED = 20;
 
 interface TimeSeriesPoint {

@@ -10,6 +10,7 @@ import type { Machine, Company, Branch, Subdivision, Module } from "@/types";
 import EnergyPulseLoader from "@/components/ui/EnergyPulseLoader";
 import { useRealtimeStore } from "@/store/useRealtimeStore";
 import CustomSelect from "@/components/ui/CustomSelect";
+import DateTimePicker from "@/components/ui/DateTimePicker";
 import AnimatedPagination from "@/components/ui/AnimatedPagination";
 
 const STATUS_CLASSES = {
@@ -781,14 +782,14 @@ if (!form.branch_id && !editing) errors.branch_id = "Branch selection is require
                         
                         <div>
                           <label className="block text-xs font-bold text-muted-foreground uppercase tracking-wider mb-2">Installation Date</label>
-                          <input 
-                            type="date"
-                            value={form.installation_date} 
-                            onChange={(e) => {
-                              setForm((f) => ({ ...f, installation_date: e.target.value }));
+                          <DateTimePicker
+                            value={form.installation_date ?? ""}
+                            onChange={(v) => {
+                              setForm((f) => ({ ...f, installation_date: v }));
                               if (fieldErrors.installation_date) setFieldErrors({...fieldErrors, installation_date: undefined});
-                            }} 
-                            className={`w-full px-4 py-3 rounded-xl border bg-background/50 text-sm font-medium focus:outline-none focus:ring-2 hover:border-amber-500/30 focus:ring-amber-500/30 focus:border-amber-500/50 transition-all border-border/60 text-muted-foreground`} 
+                            }}
+                            placeholder="Select installation date"
+                            allowClear
                           />
                         </div>
                         

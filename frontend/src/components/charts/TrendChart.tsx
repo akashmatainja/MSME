@@ -1,8 +1,8 @@
 "use client";
-import { useMemo, useId } from "react";
+import { useMemo, useId, useState } from "react";
 import {
   ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, ReferenceLine, ReferenceDot,
+  ResponsiveContainer, ReferenceLine, ReferenceDot, ReferenceArea,
 } from "recharts";
 import { BarChart2 } from "lucide-react";
 import { useChartPalette, seriesColor } from "./palette";
@@ -22,13 +22,32 @@ export interface TrendThreshold {
   kind?: "limit" | "reference";
 }
 
-type Range = "15m" | "1h" | "24h" | "7d" | "custom";
+type Range = string;
 
-function formatTick(ts: string, range: Range) {
-  const d = new Date(ts);
-  const hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
-  if (range === "7d") return d.toLocaleDateString([], { month: "short", day: "numeric" });
-  return hm;
+const SEC = 1000, MIN = 60 * SEC, HOUR = 60 * MIN, DAY = 24 * HOUR;
+const TICK_STEPS = [
+  1 * SEC, 5 * SEC, 10 * SEC, 15 * SEC, 30 * SEC,
+  1 * MIN, 2 * MIN, 5 * MIN, 10 * MIN, 15 * MIN, 30 * MIN,
+  1 * HOUR, 2 * HOUR, 3 * HOUR, 6 * HOUR, 12 * HOUR, 1 * DAY, 2 * DAY,
+];
+
+/** Round, local-time-aligned ticks (about 6) across [from, to]. */
+function timeTicks(from: number, to: number): number[] {
+  const span = to - from;
+  if (!(span > 0)) return [from];
+  const step = TICK_STEPS.find((s) => span / s <= 6) ?? 7 * DAY;
+  const tz = new Date(from).getTimezoneOffset() * MIN; // local = utc - tz
+  const ticks: number[] = [];
+  for (let local = Math.ceil((from - tz) / step) * step; local + tz <= to; local += step) ticks.push(local + tz);
+  return ticks;
+}
+
+function formatTick(t: number, span: number, range?: Range) {
+  const d = new Date(t);
+  if (range === "7d" || span > 2 * DAY) return d.toLocaleDateString([], { month: "short", day: "numeric" });
+  return d.toLocaleTimeString([], {
+    hour: "2-digit", minute: "2-digit", ...(span <= 10 * MIN ? { second: "2-digit" } : {}), hour12: false,
+  });
 }
 
 function fmt(v: number) {
@@ -64,6 +83,8 @@ export default function TrendChart({
   animate = true,
   loading = false,
   emptyText = "No data in the selected range",
+  domain,
+  onZoom,
 }: {
   data: TrendPoint[];
   series: TrendSeries[];
@@ -74,10 +95,35 @@ export default function TrendChart({
   animate?: boolean;
   loading?: boolean;
   emptyText?: string;
+  /** Fixed x-axis window [from, to] in ms; defaults to the data's extent. */
+  domain?: [number, number];
+  /** When set, dragging across the chart selects a time span to zoom into. */
+  onZoom?: (from: number, to: number) => void;
 }) {
   const p = useChartPalette();
   const gid = useId().replace(/:/g, "");
   const primary = series[0];
+  const [dragFrom, setDragFrom] = useState<number | null>(null);
+  const [dragTo, setDragTo] = useState<number | null>(null);
+
+  // Numeric time axis: rows carry `t` (ms) next to `ts`.
+  const rows = useMemo(
+    () => data
+      .map((d) => ({ ...d, t: new Date(d.ts).getTime() }) as TrendPoint & { t: number })
+      .filter((d) => Number.isFinite(d.t)),
+    [data]
+  );
+  const xDomain: [number, number] = domain ?? [rows[0]?.t ?? 0, rows[rows.length - 1]?.t ?? 0];
+  const span = xDomain[1] - xDomain[0];
+  const ticks = useMemo(() => timeTicks(xDomain[0], xDomain[1]), [xDomain[0], xDomain[1]]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const finishDrag = () => {
+    if (onZoom && dragFrom !== null && dragTo !== null && Math.abs(dragTo - dragFrom) >= 5 * SEC) {
+      onZoom(Math.min(dragFrom, dragTo), Math.max(dragFrom, dragTo));
+    }
+    setDragFrom(null);
+    setDragTo(null);
+  };
 
   // Series whose unit differs from the primary go on a second (right) axis,
   // so e.g. kW and A don't flatten each other.
@@ -86,13 +132,13 @@ export default function TrendChart({
 
   const peak = useMemo(() => {
     if (!primary || !showPeak) return null;
-    let best: { ts: string; v: number } | null = null;
-    for (const d of data) {
+    let best: { t: number; v: number } | null = null;
+    for (const d of rows) {
       const v = d[primary.key];
-      if (typeof v === "number" && (!best || v > best.v)) best = { ts: d.ts, v };
+      if (typeof v === "number" && (!best || v > best.v)) best = { t: d.t, v };
     }
     return best;
-  }, [data, primary, showPeak]);
+  }, [rows, primary, showPeak]);
 
   // Left-axis domain that always keeps the threshold line in view.
   const leftDomain = useMemo<[number, number] | undefined>(() => {
@@ -125,11 +171,22 @@ export default function TrendChart({
 
   const thresholdColor = threshold?.kind === "reference" ? p.reference : p.threshold;
 
+  const showDots = rows.length <= 40;
+  type ChartMouse = { activeLabel?: string | number } | null;
+  const labelOf = (e: ChartMouse) => (e && e.activeLabel != null ? Number(e.activeLabel) : null);
+
   return (
     <div className="w-full">
-      <div style={{ height }}>
+      <div style={{ height, cursor: onZoom ? "crosshair" : undefined }} className="select-none">
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={data} margin={{ top: 22, right: hasRight ? 4 : 64, left: -8, bottom: 0 }}>
+          <ComposedChart
+            data={rows}
+            margin={{ top: 22, right: hasRight ? 4 : 64, left: -8, bottom: 0 }}
+            onMouseDown={onZoom ? (e: ChartMouse) => { const t = labelOf(e); if (t !== null) { setDragFrom(t); setDragTo(null); } } : undefined}
+            onMouseMove={onZoom ? (e: ChartMouse) => { if (dragFrom !== null) { const t = labelOf(e); if (t !== null) setDragTo(t); } } : undefined}
+            onMouseUp={onZoom ? finishDrag : undefined}
+            onMouseLeave={onZoom ? () => { setDragFrom(null); setDragTo(null); } : undefined}
+          >
             <defs>
               {series.map((s, i) => (
                 <linearGradient key={s.key} id={`${gid}-fill-${i}`} x1="0" y1="0" x2="0" y2="1">
@@ -141,8 +198,13 @@ export default function TrendChart({
 
             <CartesianGrid stroke={p.grid} strokeDasharray="0" vertical={false} />
             <XAxis
-              dataKey="ts"
-              tickFormatter={(v) => formatTick(v, range)}
+              dataKey="t"
+              type="number"
+              scale="time"
+              domain={xDomain}
+              ticks={ticks}
+              allowDataOverflow
+              tickFormatter={(v: number) => formatTick(v, span, range)}
               tick={{ fontSize: 14, fill: p.axis, fontWeight: 700 }}
               axisLine={{ stroke: p.grid }}
               tickLine={false}
@@ -178,7 +240,10 @@ export default function TrendChart({
                 return (
                   <div className="glass-card px-3.5 py-2.5 text-xs shadow-glass-lg min-w-[160px]">
                     <p className="font-semibold text-muted-foreground mb-1.5">
-                      {new Date(label as string).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                      {new Date(Number(label)).toLocaleString([], {
+                        month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+                        ...(span <= 15 * MIN ? { second: "2-digit" } : {}), hour12: false,
+                      })}
                     </p>
                     {payload.map((it) => {
                       const s = series.find((x) => x.key === it.dataKey);
@@ -220,7 +285,7 @@ export default function TrendChart({
                 dataKey: s.key,
                 name: s.name,
                 stroke: color,
-                dot: false,
+                dot: showDots ? { r: 2.5, fill: color, strokeWidth: 0 } : false,
                 connectNulls: true,
                 isAnimationActive: animate,
                 animationDuration: 1100,
@@ -237,12 +302,24 @@ export default function TrendChart({
             {peak && (
               <ReferenceDot
                 yAxisId="left"
-                x={peak.ts}
+                x={peak.t}
                 y={peak.v}
                 ifOverflow="extendDomain"
                 shape={(props: { cx?: number; cy?: number }) => (
                   <PeakMarker {...props} color={p.threshold} surface={p.surface} />
                 )}
+              />
+            )}
+
+            {dragFrom !== null && dragTo !== null && (
+              <ReferenceArea
+                yAxisId="left"
+                x1={Math.min(dragFrom, dragTo)}
+                x2={Math.max(dragFrom, dragTo)}
+                fill={p.axis}
+                fillOpacity={0.12}
+                stroke={p.axis}
+                strokeOpacity={0.4}
               />
             )}
           </ComposedChart>
