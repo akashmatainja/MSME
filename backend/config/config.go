@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -63,6 +64,14 @@ func Load() {
 		OPCUAPassword:     getOr("OPCUA_PASSWORD", ""),
 
 		SimulatorEnabled: getOr("SIMULATOR_ENABLED", "true") != "false",
+	}
+
+	// Hosting dashboards often keep the quotes pasted around a value. pgx does not
+	// fail on a malformed URL: it silently falls back to the local socket as the OS
+	// user (host=/var/run/postgresql user=root), so reject anything unusable here.
+	Cfg.DatabaseURL = strings.Trim(strings.TrimSpace(Cfg.DatabaseURL), `"'`)
+	if !strings.HasPrefix(Cfg.DatabaseURL, "postgres://") && !strings.HasPrefix(Cfg.DatabaseURL, "postgresql://") {
+		log.Fatal("DATABASE_URL must start with postgres:// or postgresql:// (check the value set on the server)")
 	}
 
 	if len(Cfg.JWTSecret) < 32 {
