@@ -72,8 +72,23 @@ func main() {
 		WriteBufferSize: 10240, // 10KB for WebSocket messages
 	})
 
-	// WebSocket routes — register FIRST, before ALL middleware
+	// WebSocket routes — register FIRST, before ALL middleware.
+	// /ws stays on the main port too, so older frontends keep working.
 	app.Get("/ws", websocket.New(hub.ServeWS))
+
+	// Dedicated WebSocket listener on WS_PORT (default 9000).
+	if wsPort := config.Cfg.WSPort; wsPort != config.Cfg.Port {
+		wsApp := fiber.New(fiber.Config{
+			DisableStartupMessage: true,
+			ReadBufferSize:        10240,
+			WriteBufferSize:       10240,
+		})
+		wsApp.Get("/ws", websocket.New(hub.ServeWS))
+		go func() {
+			log.Printf("WebSocket server starting on :%s", wsPort)
+			log.Fatal(wsApp.Listen(":" + wsPort))
+		}()
+	}
 	// WebRTC signaling for the Remote Camera feature (room-based relay)
 	// Disabled: Expert Guided Remote Maintenance moved to a separate site.
 	// app.Get("/rtc", websocket.New(hub.ServeSignaling))
@@ -97,7 +112,8 @@ func main() {
 	app.Get("/ws-test", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{
 			"message":         "WebSocket endpoint is at /ws?machine_id=all",
-			"test_with_wscat": "wscat -c ws://localhost:8080/ws?machine_id=all",
+			"ws_port":         config.Cfg.WSPort,
+			"test_with_wscat": "wscat -c ws://localhost:" + config.Cfg.WSPort + "/ws?machine_id=all",
 		})
 	})
 

@@ -1,6 +1,7 @@
 "use client";
 import { useEffect } from "react";
 import { useRealtimeStore } from "@/store/useRealtimeStore";
+import { wsBaseUrl } from "@/lib/ws";
 
 // Global singleton WebSocket — lives outside React lifecycle
 let globalWS: WebSocket | null = null;
@@ -14,9 +15,7 @@ function connectToWS() {
     return;
   }
 
-  const base = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080")
-    .replace(/^https/, "wss")
-    .replace(/^http/, "ws");
+  const base = wsBaseUrl();
 
   console.log("[OPCUAProvider] connecting to", `${base}/ws?machine_id=all`);
 

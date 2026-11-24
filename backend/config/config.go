@@ -15,6 +15,9 @@ type Config struct {
 	// Must be a long random string (at least 32 characters).
 	JWTSecret string
 	Port      string
+	// WSPort serves the live-data WebSocket (/ws) on its own listener. When it
+	// equals Port, /ws is only served by the main listener.
+	WSPort string
 	// DBMaxConns is the database pool size. Defaults to 1 for poolers that break
 	// with concurrent prepared statements; raise it on a direct Postgres server.
 	DBMaxConns int
@@ -51,6 +54,7 @@ func Load() {
 		DatabaseURL: mustGet("DATABASE_URL"),
 		JWTSecret:   mustGet("JWT_SECRET"),
 		Port:        getOr("PORT", "8080"),
+		WSPort:      getOr("WS_PORT", "9000"),
 		DBMaxConns:  getInt("DB_MAX_CONNS", 1),
 
 		StunURL:        getOr("STUN_URL", "stun:stun.l.google.com:19302"),

@@ -57,7 +57,7 @@ OPC UA local demo: `pip install asyncua websockets`, then `python opcua_local_de
 ### Real-time machine data
 - `hub/hub.go`: `GlobalHub` fans out `MetricPayload`s to WebSocket clients at `GET /ws?machine_id=<uuid|all>`.
 - Data sources feeding the hub: the edge gateway (`POST /gateway/v1/ingest`, see below), legacy `POST /opcua/ingest` (now behind `middleware.GatewayAuth` → `handlers.IngestOPCUAData`), the in-process OPC UA client (`opcua_client.go`, `StartOPCUAClient`, commented out in `main.go`; production uses the gateway), and the simulator (`simulator.go`, `StartOPCUASimulator`, buffers and flushes to DB periodically). `POST /api/v1/dev/simulate` is the older stat simulator.
-- Frontend: `components/providers/OPCUAProvider.tsx` holds a global singleton `/ws?machine_id=all` socket feeding `store/useRealtimeStore.ts`; `hooks/useWebSocketMachineStats.ts` is the per-machine socket used on machine detail pages; `hooks/useRealtime.ts` is a leftover stub. WS URL is derived from `NEXT_PUBLIC_API_URL` (http→ws).
+- Frontend: `components/providers/OPCUAProvider.tsx` holds a global singleton `/ws?machine_id=all` socket feeding `store/useRealtimeStore.ts`; `hooks/useWebSocketMachineStats.ts` is the per-machine socket used on machine detail pages; `hooks/useRealtime.ts` is a leftover stub. WS URL comes from `src/lib/ws.ts` (`wsBaseUrl`): `NEXT_PUBLIC_WS_URL`, else `NEXT_PUBLIC_API_URL` (http→ws) with the port set to `NEXT_PUBLIC_WS_PORT` (default 9000). The backend serves `/ws` on both `PORT` and a separate listener on `WS_PORT` (default 9000).
 - WebSocket routes in `main.go` are registered before all middleware on purpose; keep new WS routes there too.
 
 ### Remote Camera / Expert Guided Remote Maintenance — DISABLED in this app

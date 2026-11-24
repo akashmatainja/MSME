@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import type { MachineStat } from "@/types";
+import { wsBaseUrl } from "@/lib/ws";
 
 interface WsMetric {
   machine_id: string;
@@ -29,11 +30,7 @@ export function useWebSocketMachineStats(machineId: string) {
   const connect = useCallback(() => {
     if (typeof window === "undefined" || !machineId || !mountedRef.current) return;
 
-    // Derive WebSocket URL from NEXT_PUBLIC_API_URL (http→ws, https→wss)
-    const base = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080")
-      .replace(/^https/, "wss")
-      .replace(/^http/, "ws");
-    const url = `${base}/ws?machine_id=${machineId}`;
+    const url = `${wsBaseUrl()}/ws?machine_id=${machineId}`;
 
     try {
       const ws = new WebSocket(url);
